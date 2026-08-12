@@ -1,5 +1,7 @@
 import frappe
 from shaafi_mobile_app.utils.response_utils import response_util
+from shaafi_mobile_app.utils.phone_utils import normalize_somali_mobile, mobile_variants
+from shaafi_mobile_app.utils.trace_utils import log_mobile_api_failure, patient_trace_context
 
 
 @frappe.whitelist()
@@ -11,7 +13,15 @@ def can_register_patient(full_name, mobile_number):
             http_status_code=400
         )
 
-    exists = frappe.db.exists("Patient", {"mobile_no": mobile_number,"first_name" : full_name})
+    canonical = normalize_somali_mobile(mobile_number)
+    if not canonical:
+        return response_util(
+            status="error",
+            message="Invalid mobile number.",
+            http_status_code=400
+        )
+
+    exists = frappe.db.exists("Patient", {"mobile_no": ["in", mobile_variants(canonical)], "first_name": full_name})
     if exists:
         return response_util(
             status="error",
@@ -19,13 +29,12 @@ def can_register_patient(full_name, mobile_number):
             http_status_code=409
         )
 
-    else:
-        return response_util(
-            status="success",
-            message="Patient not exist You can register",
-            data={"otp_sent": True},
-            http_status_code=200
-        )
+    return response_util(
+        status="success",
+        message="Patient not exist You can register",
+        data={"otp_sent": True},
+        http_status_code=200
+    )
         
 
 @frappe.whitelist()
@@ -37,10 +46,18 @@ def patient_login(mobile_number):
             http_status_code=400
         )
 
+    canonical = normalize_somali_mobile(mobile_number)
+    if not canonical:
+        return response_util(
+            status="error",
+            message="Invalid mobile number.",
+            http_status_code=400
+        )
+
     try:
         patient = frappe.get_value(
             "Patient",
-            {"mobile_no": mobile_number},
+            {"mobile_no": ["in", mobile_variants(canonical)]},
             "name",
             order_by="creation asc"
         )
@@ -71,11 +88,17 @@ def patient_login(mobile_number):
             )
 
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Patient Login Error")
+        log_mobile_api_failure(
+            "patient_login",
+            "unexpected_error",
+            patient_trace_context(mobile=canonical),
+            error=e,
+            http_status_code=500,
+        )
         return response_util(
             status="error",
             message="An error occurred while logging in",
-            error=e,
+            error=str(e),
             http_status_code=500
         )
         
@@ -96,7 +119,14 @@ def register_patient(pat_full_name, pat_gender, pat_age, pat_age_type, pat_mobil
         create_doc.sex = pat_gender
         create_doc.p_age = pat_age
         create_doc.age_type = pat_age_type
-        create_doc.mobile_no = pat_mobile_number
+        canonical_mobile = normalize_somali_mobile(pat_mobile_number)
+        if not canonical_mobile:
+            return response_util(
+                status="error",
+                message="Invalid mobile number.",
+                http_status_code=400
+            )
+        create_doc.mobile_no = canonical_mobile
         create_doc.territory = pat_district
         create_doc.insert()
         frappe.db.commit()
@@ -115,11 +145,20 @@ def register_patient(pat_full_name, pat_gender, pat_age, pat_age_type, pat_mobil
             )
 
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Patient Registration Error")
+        log_mobile_api_failure(
+            "register_patient",
+            "unexpected_error",
+            patient_trace_context(
+                mobile=normalize_somali_mobile(pat_mobile_number),
+                full_name=pat_full_name,
+            ),
+            error=e,
+            http_status_code=500,
+        )
         return response_util(
             status="error",
             message="An error occurred while registering the patient.",
-            error=e,
+            error=str(e),
             http_status_code=500
         )
           
@@ -133,10 +172,18 @@ def get_patients_with_same_mobile(mobile_number, doctor_name=None):
             http_status_code=400
         )
 
+    canonical = normalize_somali_mobile(mobile_number)
+    if not canonical:
+        return response_util(
+            status="error",
+            message="Invalid mobile number.",
+            http_status_code=400
+        )
+
     try:
         patients = frappe.get_all(
             "Patient",
-            filters={"mobile_no": mobile_number},
+            filters={"mobile_no": ["in", mobile_variants(canonical)]},
             fields=[
                 "name", "first_name", "p_age", "image",
                 "customer_group", "creation"
@@ -203,11 +250,17 @@ def get_patients_with_same_mobile(mobile_number, doctor_name=None):
         )
 
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Get Patients with Same Mobile Error")
+        log_mobile_api_failure(
+            "get_patients_with_same_mobile",
+            "unexpected_error",
+            patient_trace_context(mobile=canonical),
+            error=e,
+            http_status_code=500,
+        )
         return response_util(
             status="error",
             message="An error occurred while retrieving patients.",
-            error=e,
+            error=str(e),
             http_status_code=500
         )
         

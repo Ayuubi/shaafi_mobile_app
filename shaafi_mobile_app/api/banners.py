@@ -1,4 +1,5 @@
 import frappe
+import datetime
 import time
 from frappe.utils import now_datetime
 from shaafi_mobile_app.utils.response_utils import response_util
@@ -8,11 +9,12 @@ def get_all_banners():
     start_time = time.time()
 
     try:
-        current_time = now_datetime()
+        # Normalize to `date` to avoid comparing `datetime.datetime` with `datetime.date`.
+        current_date = now_datetime().date()
 
         # Step 1: Fetch all banners
         banners = frappe.get_all(
-            "Doctor banners",  # or rename to just "Banners"
+            "Doctor banners",  
             fields=[
                 "name",
                 "banner_image",
@@ -33,8 +35,18 @@ def get_all_banners():
                 valid_till = banner.get("valid_till")
                 # if not valid_till or valid_till > current_time:
                 # Only include if valid_till is present and in the future
-                if valid_till and valid_till > current_time:
-                    active_banners.append(banner)
+                if valid_till:
+                    # `valid_till` may come back as `datetime.date` (or sometimes `datetime.datetime`).
+                    if isinstance(valid_till, datetime.datetime):
+                        valid_till_date = valid_till.date()
+                    elif isinstance(valid_till, datetime.date):
+                        valid_till_date = valid_till
+                    else:
+                        # Fallback for string-ish values coming from DB serialization.
+                        valid_till_date = datetime.datetime.strptime(str(valid_till), "%Y-%m-%d").date()
+
+                    if valid_till_date > current_date:
+                        active_banners.append(banner)
             else:
                 active_banners.append(banner)
 

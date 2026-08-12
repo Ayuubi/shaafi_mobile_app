@@ -25,7 +25,7 @@
    "reqd": 1
   },
   {
-   "default": "Banner",
+   "default": "Service",
    "fieldname": "banner_type",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -82,7 +82,7 @@
  "image_field": "banner_image",
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-08-04 15:11:50.505958",
+ "modified": "2026-07-29 12:27:12.779684",
  "modified_by": "Administrator",
  "module": "Shaafi Mobile App",
  "name": "Doctor banners",

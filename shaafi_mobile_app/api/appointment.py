@@ -1,7 +1,12 @@
 import frappe
-from shaafi_mobile_app.utils.response_utils import response_util
 from datetime import datetime
+from shaafi_mobile_app.utils.response_utils import response_util
 from shaafi_mobile_app.utils.erpnext_utils import get_mobile_app_defaults
+from shaafi_mobile_app.utils.phone_utils import normalize_somali_mobile, mobile_variants
+from shaafi_mobile_app.utils.trace_utils import (
+    appointment_trace_context,
+    log_mobile_api_failure,
+)
 
 
 def calculate_appointment_details(PID, doctor_practitioner, appointment_date):
@@ -109,6 +114,13 @@ def validate_appointment_booking(PID, doctor_practitioner, appointment_date):
         )
 
     except frappe.ValidationError as ve:
+        log_mobile_api_failure(
+            "validate_appointment_booking",
+            "validation_error",
+            appointment_trace_context(PID, doctor_practitioner, appointment_date),
+            error=ve,
+            http_status_code=400,
+        )
         return response_util(
             status="error",
             message="Validation failed during appointment simulation.",
@@ -116,7 +128,13 @@ def validate_appointment_booking(PID, doctor_practitioner, appointment_date):
             http_status_code=400,
         )
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Validate Appointment Booking Error")
+        log_mobile_api_failure(
+            "validate_appointment_booking",
+            "unexpected_error",
+            appointment_trace_context(PID, doctor_practitioner, appointment_date),
+            error=e,
+            http_status_code=500,
+        )
         return response_util(
             status="error",
             message="Unexpected error while validating appointment booking.",
@@ -198,12 +216,19 @@ def create_appointment(PID, doctor_practitioner, appointment_date):
                 "appointment_type": appointment_type,
                 "amount_charged": payable_amount,
                 "original_amount": original_amount,
+                "token_no": appointment.token_no,
             },
             http_status_code=200,
         )
 
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Create Appointment Error")
+        log_mobile_api_failure(
+            "create_appointment",
+            "unexpected_error",
+            appointment_trace_context(PID, doctor_practitioner, appointment_date),
+            error=e,
+            http_status_code=500,
+        )
         return response_util(
             status="error",
             message="An error occurred while creating the appointment.",
@@ -215,8 +240,8 @@ def create_appointment(PID, doctor_practitioner, appointment_date):
         
 @frappe.whitelist()
 def get_appointments(mobile_no=None):
+    canonical_mobile = None
 
-    # Validate input
     if not mobile_no:
         frappe.response['http_status_code'] = 400
         return {
@@ -224,30 +249,34 @@ def get_appointments(mobile_no=None):
             "msg": "Mobile No is required."
         }
 
+    canonical_mobile = normalize_somali_mobile(mobile_no)
+    if not canonical_mobile:
+        frappe.response['http_status_code'] = 400
+        return {
+            "status": "error",
+            "msg": "Invalid mobile number."
+        }
+
     try:
-        # Only return last 90 days
+        mobile_numbers = mobile_variants(canonical_mobile)
         cutoff_date = frappe.utils.add_days(frappe.utils.today(), -90)
 
-        # Fetch all appointments (Que docs) linked to this patient
         appointments = frappe.get_all(
             "Que",
-            filters={"mobile": mobile_no, "docstatus": ["<", 2], "creation": [">=", cutoff_date]},
-            fields=["name", "patient","patient_name", "practitioner", "paid_amount", "creation", 
-                    "appointment_source","token_no"
-                    ],
+            filters={"mobile": ["in", mobile_numbers], "docstatus": ["<", 2], "creation": [">=", cutoff_date]},
+            fields=["name", "patient", "patient_name", "practitioner", "paid_amount", "creation",
+                    "appointment_source", "token_no"],
             order_by="creation desc"
         )
 
-        # If no appointments found, return 404
         if not appointments:
             frappe.response['http_status_code'] = 404
             return {
                 "status": "error",
-                "msg": f"No appointments found for patient: {mobile_no}",
+                "msg": f"No appointments found for patient: {canonical_mobile}",
                 "Data": None
             }
 
-        # Return appointments list
         frappe.response['http_status_code'] = 200
         return {
             "status": "success",
@@ -256,7 +285,13 @@ def get_appointments(mobile_no=None):
         }
 
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Get Appointments Error")
+        log_mobile_api_failure(
+            "get_appointments",
+            "unexpected_error",
+            appointment_trace_context(mobile=canonical_mobile),
+            error=e,
+            http_status_code=500,
+        )
         frappe.response['http_status_code'] = 500
         return {
             "status": "error",

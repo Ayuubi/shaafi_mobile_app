@@ -1,8 +1,11 @@
 import frappe
 import re
-from frappe.utils import flt
 from shaafi_mobile_app.utils.response_utils import response_util
 from shaafi_mobile_app.utils.erpnext_utils import get_mobile_app_defaults
+from shaafi_mobile_app.utils.phone_utils import normalize_somali_mobile, mobile_variants
+from shaafi_mobile_app.utils.trace_utils import log_mobile_api_failure, order_trace_context
+
+
 
 
 
@@ -124,6 +127,12 @@ def validate_sales_order_for_conversion(sales_order_id=None):
         )
 
     except frappe.DoesNotExistError:
+        log_mobile_api_failure(
+            "validate_sales_order_for_conversion",
+            "sales_order_not_found",
+            order_trace_context(sales_order_id=sales_order_id),
+            http_status_code=404,
+        )
         return response_util(
             status="error",
             message=f"Sales Order {sales_order_id} not found.",
@@ -131,7 +140,13 @@ def validate_sales_order_for_conversion(sales_order_id=None):
         )
 
     except Exception as e:
-        frappe.errprint(f"Error converting Sales Order to Sales Invoice: {str(e)}")
+        log_mobile_api_failure(
+            "validate_sales_order_for_conversion",
+            "unexpected_error",
+            order_trace_context(sales_order_id=sales_order_id),
+            error=e,
+            http_status_code=500,
+        )
         return response_util(
             status="error",
             message="Unexpected error while converting Sales Order to Sales Invoice.",
@@ -195,6 +210,7 @@ def convert_sales_order_to_invoice(sales_order_id=None):
         si_doc.posting_date = frappe.utils.nowdate()
         si_doc.ref_practitioner = so_doc.ref_practitioner
         si_doc.cost_center = defaults["cost_center"]
+        si_doc.source_order = defaults["source_order"]
 
         for item in so_doc.items:
             si_doc.append("items", {
@@ -258,6 +274,12 @@ def convert_sales_order_to_invoice(sales_order_id=None):
         )
 
     except frappe.DoesNotExistError:
+        log_mobile_api_failure(
+            "convert_sales_order_to_invoice",
+            "sales_order_not_found",
+            order_trace_context(sales_order_id=sales_order_id),
+            http_status_code=404,
+        )
         return response_util(
             status="error",
             message=f"Sales Order {sales_order_id} not found.",
@@ -265,7 +287,13 @@ def convert_sales_order_to_invoice(sales_order_id=None):
         )
 
     except Exception as e:
-        frappe.errprint(f"Error converting Sales Order to Sales Invoice: {str(e)}")
+        log_mobile_api_failure(
+            "convert_sales_order_to_invoice",
+            "unexpected_error",
+            order_trace_context(sales_order_id=sales_order_id),
+            error=e,
+            http_status_code=500,
+        )
         return response_util(
             status="error",
             message="Unexpected error while converting Sales Order to Sales Invoice.",
@@ -276,6 +304,7 @@ def convert_sales_order_to_invoice(sales_order_id=None):
 
 @frappe.whitelist()
 def get_sales_orders_by_mobile(mobile=None):
+    canonical_mobile = None
     try:
         if not mobile:
             return response_util(
@@ -284,16 +313,26 @@ def get_sales_orders_by_mobile(mobile=None):
                 http_status_code=400
             )
 
-        # Step 1: Get all patients with this mobile
+        canonical_mobile = normalize_somali_mobile(mobile)
+        if not canonical_mobile:
+            return response_util(
+                status="error",
+                message="Invalid mobile number.",
+                http_status_code=400
+            )
+
+        mobile_numbers = mobile_variants(canonical_mobile)
+
+        # Step 1: Get all patients with this mobile (any common stored format)
         patient_records = frappe.get_all(
             "Patient",
-            filters={"mobile": mobile},
+            filters={"mobile": ["in", mobile_numbers]},
             fields=["name", "patient_name"]
         )
         if not patient_records:
             return response_util(
                 status="error",
-                message=f"No patients found for mobile: {mobile}",
+                message=f"No patients found for mobile: {canonical_mobile}",
                 data=[],
                 http_status_code=404
             )
@@ -337,7 +376,13 @@ def get_sales_orders_by_mobile(mobile=None):
         )
 
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Get Sales Orders with Items Error")
+        log_mobile_api_failure(
+            "get_sales_orders_by_mobile",
+            "unexpected_error",
+            order_trace_context(mobile=canonical_mobile or mobile),
+            error=e,
+            http_status_code=500,
+        )
         return response_util(
             status="error",
             message="Internal Server Error",
